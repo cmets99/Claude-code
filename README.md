@@ -8,15 +8,20 @@ as a PWA on iPhone. Locked behind a PIN.
 
 - **Frontend:** React + Vite, plain CSS (mobile-first), `vite-plugin-pwa` for the
   manifest + service worker
-- **Backend:** Node.js + Express
-- **Database:** SQLite (single file, via `better-sqlite3`) — no external setup
+- **Backend:** Node.js + Express, deployed as a single Vercel serverless function
+- **Database:** [Turso](https://turso.tech) — a free, hosted, SQLite-compatible
+  database (via `@libsql/client`). Locally it falls back to a plain SQLite file with
+  zero setup; production needs Turso because Vercel's serverless functions have no
+  persistent disk.
 - **Auth:** PIN, hashed with bcrypt, verified server-side; a session token is issued
-  and stored in the browser
+  and stored (in the database, not in server memory, so it survives across serverless
+  invocations) and kept in the browser's `localStorage`
 
 ## Project layout
 
 ```
-server/   Express API + SQLite (also serves the built frontend in production)
+api/      Single file (index.js) that hands the Express app to Vercel as a serverless function
+server/   The Express app itself: routes, DB access, auth — shared by api/ and local dev
 client/   React app (Vite)
 scripts/  One-off script that generated the PWA icons
 ```
@@ -29,16 +34,17 @@ You need Node.js 18+ installed.
 
 ```bash
 # from the repo root
-npm run install:all   # installs deps for both server/ and client/
+npm run install:all   # installs deps for both the root (server) and client/
 npm run dev            # runs backend (port 3001) and frontend (port 5173) together
 ```
 
 Open **http://localhost:5173** in your browser. The Vite dev server proxies `/api`
 requests to the Express backend automatically (see `client/vite.config.js`).
 
-The first time you open the app you'll be asked to **create a PIN** — that's stored
-(hashed) in the SQLite file at `server/data/dashboard.db`, which is created
-automatically on first run.
+The first time you open the app you'll be asked to **create a PIN**. Locally, with no
+`TURSO_DATABASE_URL` set, everything (PIN hash, items, sessions) is stored in a plain
+SQLite file at `server/data/dashboard.db`, created automatically — no Turso account
+needed just to develop.
 
 ### Trying it on your iPhone (same Wi-Fi)
 
@@ -46,15 +52,12 @@ automatically on first run.
 2. Run `npm run dev` as above.
 3. On your iPhone, open Safari to `http://192.168.1.42:5173`.
 
-Note: Safari on iOS only registers **service workers** and shows the full "Add to
-Home Screen" installable experience over **HTTPS** (or `localhost`). A plain `http://`
-LAN address will let you use the app and see the UI, but the offline/PWA install
-behavior is best verified after you deploy it (step 2 below), since your deployed
-URL will be HTTPS automatically.
+Note: Safari on iOS only shows the full "Add to Home Screen" installable experience
+over **HTTPS** (or `localhost`). A plain `http://` LAN address works for using the
+app, but verify the actual install behavior after deploying (below), since your
+Vercel URL is HTTPS automatically.
 
 ### Running the production build locally (optional)
-
-This is closer to what actually ships:
 
 ```bash
 npm run build     # builds the React app into client/dist
@@ -65,53 +68,91 @@ Visit **http://localhost:3001**.
 
 ---
 
-## 2. Deploying
+## 2. Deploying to Vercel (free)
 
-There are two straightforward options. **Railway is recommended** because this app's
-SQLite file needs to live on a real, persistent disk — Vercel's serverless functions
-don't guarantee that (more below).
+Vercel's Hobby tier is free and doesn't require a credit card to sign up. This repo
+is already set up for it: `vercel.json` at the root routes `/api/*` to a single
+serverless function (`api/index.js`), which just re-exports the same Express app used
+locally.
 
-### Option A — Railway (recommended, single service)
+### Step 1 — Create a Turso database (free, no credit card)
 
-Railway runs this as one always-on Node process, so the SQLite file just sits on disk
-like it would on your own machine.
+Vercel serverless functions don't have persistent disk, so the local SQLite-file
+fallback won't reliably keep your data. Turso gives you a real, free, hosted
+SQLite-compatible database instead.
 
-1. Push this repo to GitHub (if you haven't already).
-2. In Railway: **New Project → Deploy from GitHub repo** → pick this repo.
-3. Railway will detect `railway.json` and Nixpacks will run:
-   - Build: `npm run build` (installs both server & client deps, builds the React app)
-   - Start: `npm start` (Express serves the API + the built frontend on `$PORT`)
-4. **Add a persistent Volume** (Railway dashboard → your service → *Volumes*) mounted
-   at, say, `/data`. Then set an environment variable:
+1. Go to **https://turso.tech** and sign up (email/GitHub — no card required for the
+   free tier).
+2. Install their CLI or use the web dashboard to create a database — either works:
+   ```bash
+   curl -sSfL https://get.tur.so/install.sh | bash
+   turso auth login
+   turso db create personal-dashboard
+   turso db show personal-dashboard --url
+   turso db tokens create personal-dashboard
    ```
-   DB_PATH=/data/dashboard.db
-   ```
-   This ensures your tasks/PIN survive redeploys. If you skip this, the app still
-   works, but a redeploy can reset the database.
-5. Once deployed, open the Railway-provided HTTPS URL on your iPhone in Safari, tap
-   **Share → Add to Home Screen**. It'll launch full-screen with no browser chrome.
+3. You'll end up with two values you'll need in step 4:
+   - A **database URL** (looks like `libsql://personal-dashboard-yourname.turso.io`)
+   - An **auth token** (a long string)
 
-That's it — one service, one URL, minimal config.
+### Step 2 — Push this project to your own GitHub repo
 
-### Option B — Vercel (frontend) + Railway (backend)
+This session's repo is separate from your own account — push a copy to a repo you
+control so Vercel can import it.
 
-If you'd rather host the frontend on Vercel:
+```bash
+# from the project folder
+git init                                   # only if not already a git repo
+git add -A
+git commit -m "Personal dashboard MVP"
 
-1. Deploy the backend on Railway as in steps 1–4 above (or Render/Fly — anywhere
-   with a persistent disk works). Note its URL, e.g. `https://your-app.up.railway.app`.
-2. In Vercel: **New Project**, import this repo, and set:
-   - **Root Directory:** `client`
-   - **Build Command:** `npm run build` (Vercel auto-detects Vite)
-   - **Output Directory:** `dist`
-   - **Environment Variable:** `VITE_API_URL=https://your-app.up.railway.app`
-3. Deploy. `client/vercel.json` handles SPA routing fallback.
+# on github.com: click "+" → New repository → name it, set to Private → Create
+# (don't initialize with a README/gitignore — this repo already has both)
 
-**Why not run the backend on Vercel too?** Vercel's Node functions are serverless —
-each invocation can run in a fresh, ephemeral filesystem, so a SQLite file written
-during one request isn't guaranteed to be there on the next. That's fine for
-stateless APIs but wrong for a database file you want to keep. If you want everything
-on Vercel eventually, the Phase 2 move would be swapping SQLite for a hosted DB
-(Vercel Postgres, Turso, etc.) — not needed for this MVP.
+git remote add origin https://github.com/<your-username>/<your-repo>.git
+git branch -M main
+git push -u origin main
+```
+
+If this project is already in a repo (like this session's), and you just want your
+own copy: create the new private repo on GitHub first, then run the `remote add` /
+`push` commands above pointing at your new repo's URL instead of adding a second
+remote to this one.
+
+### Step 3 — Sign up for Vercel and import the repo
+
+1. Go to **https://vercel.com/signup** and choose **Continue with GitHub**. Free
+   Hobby tier, no credit card required.
+2. **Add New… → Project**, then **Import** the GitHub repo you just pushed.
+3. Vercel should auto-detect the settings from `vercel.json`:
+   - **Root Directory:** repo root (leave as-is — don't set it to `client`)
+   - **Build Command:** `npm run build`
+   - **Output Directory:** `client/dist`
+4. Before clicking Deploy, add environment variables (**Environment Variables**
+   section on the same import screen, or later under **Settings → Environment
+   Variables**):
+   | Name | Value |
+   |---|---|
+   | `TURSO_DATABASE_URL` | the `libsql://...` URL from Step 1 |
+   | `TURSO_AUTH_TOKEN` | the token from Step 1 |
+5. Click **Deploy**. First build takes a minute or two.
+
+### Step 4 — Verify it in production
+
+1. Open the `https://your-project.vercel.app` URL Vercel gives you.
+2. You should see the **"Set up your PIN"** screen (proof the app loaded and reached
+   `/api/auth/status` against your Turso database — if this hangs or errors, double
+   check the two environment variables are spelled exactly right and redeploy).
+3. Create a PIN, add a quick-capture item, mark it a task, complete it — confirms the
+   full read/write path to Turso works.
+4. Reload the page (or open it in a private tab) — you should land on **"Enter your
+   PIN"**, not the setup screen, and your item should still be there. That confirms
+   data is actually persisting (the thing Vercel's local filesystem couldn't do).
+5. On your iPhone, open the `vercel.app` URL in Safari → **Share → Add to Home
+   Screen**. It should launch full-screen with your app icon, no browser chrome.
+
+That's the whole path, entirely on free tiers: GitHub (free), Vercel Hobby (free),
+Turso free tier (500 databases / generous row-read limits, no card required).
 
 ---
 
@@ -119,11 +160,20 @@ on Vercel eventually, the Phase 2 move would be swapping SQLite for a hosted DB
 
 - The PIN is never stored in plaintext — only a bcrypt hash, in the `settings` table.
 - On first load (no PIN set yet), the app prompts you to create one.
-- Verifying the PIN issues a random session token (kept in-memory server-side, 30-day
-  expiry) that the browser stores in `localStorage` and sends as a Bearer token.
-  Restarting the server invalidates all sessions — acceptable for a single-user app.
-- There's no "forgot PIN" flow in this MVP. To reset it, stop the server and delete
-  the `settings` row (or the whole `.db` file, which also clears your items).
+- Verifying the PIN issues a random session token, stored in a `sessions` table (not
+  server memory — serverless functions don't keep memory between invocations), 30-day
+  expiry. The browser keeps it in `localStorage` and sends it as a Bearer token.
+- There's no "forgot PIN" flow in this MVP. To reset it in production, open the Turso
+  CLI/dashboard and delete the `pin_hash` row from `settings` (or drop all tables to
+  start clean). Locally, just delete `server/data/dashboard.db`.
+
+## Alternative: Railway instead of Vercel
+
+If you'd rather run this as a single always-on Node process instead of serverless
+functions (no Turso needed — a local SQLite file persists fine on a real disk),
+`railway.json` is still here and works with the same `npm run build` / `npm start`
+scripts. Note Railway's free trial credit runs out after a few dollars of usage;
+Vercel + Turso, as documented above, is the actually-free-long-term path.
 
 ## What's here vs. what's next
 
