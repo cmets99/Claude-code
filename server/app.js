@@ -10,6 +10,11 @@ const itemsRoutes = require('./routes/items');
 
 const app = express();
 
+// Trust Vercel's (and Railway's) proxy so req.ip reflects the real client
+// via X-Forwarded-For, instead of the proxy's own address. Needed for the
+// per-client PIN lockout in routes/auth.js to work correctly.
+app.set('trust proxy', 1);
+
 app.use(cors());
 app.use(express.json());
 

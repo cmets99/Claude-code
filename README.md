@@ -95,29 +95,17 @@ SQLite-compatible database instead.
    - A **database URL** (looks like `libsql://personal-dashboard-yourname.turso.io`)
    - An **auth token** (a long string)
 
-### Step 2 — Push this project to your own GitHub repo
+### Step 2 — GitHub repo
 
-This session's repo is separate from your own account — push a copy to a repo you
-control so Vercel can import it.
+Good news: this project is already in `cmets99/Claude-code`, a repo under your own
+GitHub account (confirmed via the GitHub API — you have admin access to it), on
+branch `claude/personal-dashboard-pwa-oyuxvz`. There's no separate "push to your own
+repo" step — Vercel can import this repo directly.
 
-```bash
-# from the project folder
-git init                                   # only if not already a git repo
-git add -A
-git commit -m "Personal dashboard MVP"
-
-# on github.com: click "+" → New repository → name it, set to Private → Create
-# (don't initialize with a README/gitignore — this repo already has both)
-
-git remote add origin https://github.com/<your-username>/<your-repo>.git
-git branch -M main
-git push -u origin main
-```
-
-If this project is already in a repo (like this session's), and you just want your
-own copy: create the new private repo on GitHub first, then run the `remote add` /
-`push` commands above pointing at your new repo's URL instead of adding a second
-remote to this one.
+One thing to fix by hand: the repo is currently **public**, not private. GitHub's API
+doesn't expose a way to flip that from here, so do it yourself:
+**github.com/cmets99/Claude-code → Settings → General → Danger Zone → Change
+visibility → Private.**
 
 ### Step 3 — Sign up for Vercel and import the repo
 
@@ -166,6 +154,10 @@ Turso free tier (500 databases / generous row-read limits, no card required).
 - There's no "forgot PIN" flow in this MVP. To reset it in production, open the Turso
   CLI/dashboard and delete the `pin_hash` row from `settings` (or drop all tables to
   start clean). Locally, just delete `server/data/dashboard.db`.
+- `/api/auth/verify` locks out after 5 wrong PIN attempts from the same client for 5
+  minutes (tracked in a `login_attempts` table) — a 4-digit PIN is only 10,000
+  combinations, and this app will sit on a public URL, so unthrottled guessing wasn't
+  acceptable.
 
 ## Alternative: Railway instead of Vercel
 

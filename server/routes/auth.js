@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const { db, ready } = require('../db');
 const { issueToken } = require('../middleware/auth');
+const { checkLocked, recordFailure, recordSuccess } = require('../loginAttempts');
 const asyncHandler = require('../asyncHandler');
 
 const router = express.Router();
@@ -47,14 +48,31 @@ router.post(
 router.post(
   '/verify',
   asyncHandler(async (req, res) => {
+    const clientKey = req.ip;
+
+    const lockStatus = await checkLocked(clientKey);
+    if (lockStatus.locked) {
+      return res.status(429).json({
+        error: `Too many incorrect attempts. Try again in ${Math.ceil(lockStatus.retryAfterSeconds / 60)} minute(s).`,
+      });
+    }
+
     const { pin } = req.body;
     const hash = await getPinHash();
     if (!hash) {
       return res.status(400).json({ error: 'No PIN set up yet' });
     }
     if (!pin || !bcrypt.compareSync(pin, hash)) {
+      const result = await recordFailure(clientKey);
+      if (result.locked) {
+        return res.status(429).json({
+          error: `Too many incorrect attempts. Try again in ${Math.ceil(result.retryAfterSeconds / 60)} minute(s).`,
+        });
+      }
       return res.status(401).json({ error: 'Incorrect PIN' });
     }
+
+    await recordSuccess(clientKey);
     const token = await issueToken();
     res.json({ token });
   })
